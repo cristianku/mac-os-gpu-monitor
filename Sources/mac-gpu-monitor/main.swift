@@ -209,6 +209,7 @@ func snapshots() -> [GPUSnapshot] {
             exact: [
                 "VRAM Used Bytes",
                 "vramUsedBytes",
+                "inUseVidMemoryBytes",
                 "VRAM,usedBytes",
                 "VRAM Used"
             ],
