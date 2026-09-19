@@ -180,8 +180,11 @@ func systemProfilerDisplays() -> [DisplayInfo] {
 }
 
 // Model name and total VRAM do not change while the process is running.
-// Cache them once so --watch only polls the lightweight IOKit counters.
-private let cachedDisplayInfo = systemProfilerDisplays()
+// Initialize them lazily so --help/--version do not invoke system_profiler,
+// while --watch still pays this cost only once.
+private enum DisplayCache {
+    static let value = systemProfilerDisplays()
+}
 
 func snapshots() -> [GPUSnapshot] {
     let samples = enumerateAccelerators()
@@ -265,7 +268,7 @@ func snapshots() -> [GPUSnapshot] {
             contains: ["gpu power"]
         )
 
-        let displayInfo = offset < cachedDisplayInfo.count ? cachedDisplayInfo[offset] : nil
+        let displayInfo = offset < DisplayCache.value.count ? DisplayCache.value[offset] : nil
         let name = displayInfo?.name
             ?? (sample.properties["IOClass"] as? String)
             ?? "GPU \(offset)"
@@ -389,7 +392,7 @@ func printRaw() {
     }
 
     for (index, sample) in samples.enumerated() {
-        let name = index < cachedDisplayInfo.count ? cachedDisplayInfo[index].name : "GPU \(index)"
+        let name = index < DisplayCache.value.count ? DisplayCache.value[index].name : "GPU \(index)"
         print("GPU \(index) \(name) PerformanceStatistics")
         print(String(repeating: "-", count: 72))
 
