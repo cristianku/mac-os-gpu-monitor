@@ -264,6 +264,7 @@ func snapshots() -> [GPUSnapshot] {
             exact: [
                 "GPU Power(W)",
                 "Power(W)",
+                "Total Power(W)",
                 "GPU Power"
             ],
             contains: ["gpu power"]
