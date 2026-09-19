@@ -1,7 +1,7 @@
 import Foundation
 import IOKit
 
-private let appVersion = "0.1.0"
+private let appVersion = "0.1.1"
 
 struct GPUSnapshot: Codable {
     let index: Int
@@ -18,6 +18,11 @@ struct GPUSnapshot: Codable {
 struct AcceleratorSample {
     let properties: [String: Any]
     let statistics: [String: Any]
+}
+
+struct DisplayInfo {
+    let name: String
+    let vramTotalBytes: UInt64?
 }
 
 func numericValue(_ value: Any?) -> Double? {
@@ -109,34 +114,6 @@ func enumerateAccelerators() -> [AcceleratorSample] {
     return samples
 }
 
-func displayNames() -> [String] {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
-    process.arguments = ["SPDisplaysDataType", "-json", "-detailLevel", "mini"]
-
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = FileHandle.nullDevice
-
-    do {
-        try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0,
-              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let displays = object["SPDisplaysDataType"] as? [[String: Any]] else {
-            return []
-        }
-
-        return displays.compactMap { item in
-            (item["sppci_model"] as? String) ?? (item["_name"] as? String)
-        }
-    } catch {
-        return []
-    }
-}
-
 func parseMemoryString(_ value: String?) -> UInt64? {
     guard let value else { return nil }
 
@@ -165,7 +142,7 @@ func parseMemoryString(_ value: String?) -> UInt64? {
     return UInt64(number * multiplier)
 }
 
-func profilerVRAMTotals() -> [UInt64?] {
+func systemProfilerDisplays() -> [DisplayInfo] {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
     process.arguments = ["SPDisplaysDataType", "-json", "-detailLevel", "mini"]
@@ -186,20 +163,28 @@ func profilerVRAMTotals() -> [UInt64?] {
         }
 
         return displays.map { item in
-            parseMemoryString(
-                (item["spdisplays_vram"] as? String) ??
-                (item["spdisplays_vram_shared"] as? String)
+            let name = (item["sppci_model"] as? String)
+                ?? (item["_name"] as? String)
+                ?? "Unknown GPU"
+
+            let vram = parseMemoryString(
+                (item["spdisplays_vram"] as? String)
+                ?? (item["spdisplays_vram_shared"] as? String)
             )
+
+            return DisplayInfo(name: name, vramTotalBytes: vram)
         }
     } catch {
         return []
     }
 }
 
+// Model name and total VRAM do not change while the process is running.
+// Cache them once so --watch only polls the lightweight IOKit counters.
+private let cachedDisplayInfo = systemProfilerDisplays()
+
 func snapshots() -> [GPUSnapshot] {
     let samples = enumerateAccelerators()
-    let names = displayNames()
-    let profilerVRAM = profilerVRAMTotals()
 
     return samples.enumerated().map { offset, sample in
         let stats = sample.statistics
@@ -280,21 +265,12 @@ func snapshots() -> [GPUSnapshot] {
             contains: ["gpu power"]
         )
 
-        let name: String
-        if offset < names.count {
-            name = names[offset]
-        } else {
-            name = (sample.properties["IOClass"] as? String) ?? "GPU \(offset)"
-        }
+        let displayInfo = offset < cachedDisplayInfo.count ? cachedDisplayInfo[offset] : nil
+        let name = displayInfo?.name
+            ?? (sample.properties["IOClass"] as? String)
+            ?? "GPU \(offset)"
 
-        let totalVRAM: UInt64?
-        if let totalVRAMFromStats {
-            totalVRAM = totalVRAMFromStats
-        } else if offset < profilerVRAM.count {
-            totalVRAM = profilerVRAM[offset]
-        } else {
-            totalVRAM = nil
-        }
+        let totalVRAM = totalVRAMFromStats ?? displayInfo?.vramTotalBytes
 
         return GPUSnapshot(
             index: offset,
@@ -413,7 +389,8 @@ func printRaw() {
     }
 
     for (index, sample) in samples.enumerated() {
-        print("GPU \(index) PerformanceStatistics")
+        let name = index < cachedDisplayInfo.count ? cachedDisplayInfo[index].name : "GPU \(index)"
+        print("GPU \(index) \(name) PerformanceStatistics")
         print(String(repeating: "-", count: 72))
 
         for key in sample.statistics.keys.sorted() {
